@@ -42,7 +42,7 @@ reviews_data = load_reviews()
 
 @bot.event
 async def on_ready():
-    print(f"تم تشغيل البوت: {bot.user}")
+    print(f"✅ تم تشغيل البوت: {bot.user}")
 
 @bot.command(name="قيم")
 async def rate_user(ctx, member: discord.Member = None, stars: int = None, *, comment: str = None):
@@ -68,7 +68,7 @@ async def rate_user(ctx, member: discord.Member = None, stars: int = None, *, co
 
     review_channel = bot.get_channel(REVIEW_CHANNEL_ID)
     if review_channel is None:
-        await ctx.reply("ما لقيت روم التقييمات، تأكد من الآيدي.")
+        await ctx.reply("ما لقيت روم التقييمات، تأكد من الآيدي وخلي البوت عنده صلاحية يرسل في الروم.")
         return
 
     target_id = str(member.id)
@@ -96,7 +96,7 @@ async def rate_user(ctx, member: discord.Member = None, stars: int = None, *, co
     total_reviews = len(user_reviews)
 
     embed = discord.Embed(
-        title="⭐ **تقييم جديد** ⭐",
+        title="⭐ تقييم جديد ⭐",
         description=(
             f"# **تعامل ممتاز**\n"
             f"## **{comment[:80]}**\n\n"
@@ -132,7 +132,7 @@ async def reputation(ctx, member: discord.Member = None):
     rounded_stars = max(1, min(5, round(avg)))
 
     embed = discord.Embed(
-        title="📊 **سمعة العضو**",
+        title="📊 سمعة العضو",
         description=(
             f"**الشخص:** {member.mention}\n"
             f"**المتوسط:** {avg} من 5\n"
@@ -142,7 +142,6 @@ async def reputation(ctx, member: discord.Member = None):
         color=discord.Color.green()
     )
 
-    # آخر 5 تقييمات
     latest_reviews = user_reviews[-5:][::-1]
     for i, review in enumerate(latest_reviews, start=1):
         embed.add_field(
