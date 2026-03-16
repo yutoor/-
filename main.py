@@ -2,7 +2,8 @@ import discord
 from discord.ext import commands
 import json
 import os
-from datetime import datetime
+import time
+from datetime import datetime, timezone
 
 TOKEN = os.getenv("TOKEN")
 REVIEW_CHANNEL_ID = 1482899764407435394
@@ -17,6 +18,13 @@ intents.guilds = True
 intents.members = True
 
 bot = commands.Bot(command_prefix="!", intents=intents, help_command=None)
+
+# pending_reviews[user_id] = {
+#   "stars": 5,
+#   "created_at": 1234567890,
+#   "channel_id": 123
+# }
+pending_reviews = {}
 
 
 def ensure_data_dir():
@@ -41,148 +49,193 @@ def save_json(path, data):
 
 
 reviews_data = load_json(REVIEWS_FILE, {})
-config_data = load_json(CONFIG_FILE, {"button_message_id": None})
+config_data = load_json(CONFIG_FILE, {"message_id": None})
 
 
 def stars_view(count: int) -> str:
     return "⭐" * count
 
 
-def average_rating(user_reviews):
+def add_review(user: discord.Member | discord.User, stars: int, comment: str):
+    user_id = str(user.id)
+
+    if user_id not in reviews_data:
+        reviews_data[user_id] = []
+
+    reviews_data[user_id].append({
+        "user_id": user.id,
+        "user_name": str(user),
+        "stars": stars,
+        "comment": comment,
+        "time": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+    })
+
+    save_json(REVIEWS_FILE, reviews_data)
+
+
+def average_rating(user_id: int):
+    user_reviews = reviews_data.get(str(user_id), [])
     if not user_reviews:
         return 0
-    total = sum(r["stars"] for r in user_reviews)
+    total = sum(item["stars"] for item in user_reviews)
     return round(total / len(user_reviews), 2)
 
 
-class ReviewModal(discord.ui.Modal, title="إرسال تقييم"):
-    target_name = discord.ui.TextInput(
-        label="اسم الشخص",
-        placeholder="مثال: خالد",
-        required=True,
-        max_length=50
+def total_reviews(user_id: int):
+    return len(reviews_data.get(str(user_id), []))
+
+
+def build_review_embed(user: discord.Member | discord.User, stars: int, comment: str):
+    avg = average_rating(user.id)
+    total = total_reviews(user.id)
+
+    embed = discord.Embed(
+        title="⭐ تقييم جديد ⭐",
+        description=(
+            f"## **تقييم المتجر**\n\n"
+            f"**العميل:** {user.mention}\n"
+            f"**التقييم:** {stars_view(stars)} `({stars}/5)`\n"
+            f"**عدد مرات التقييم:** {total}\n"
+            f"**المتوسط:** {avg} من 5\n"
+            f"**التجربة:** {comment}"
+        ),
+        color=discord.Color.gold()
     )
-
-    stars = discord.ui.TextInput(
-        label="عدد النجوم من 1 إلى 5",
-        placeholder="مثال: 5",
-        required=True,
-        max_length=1
-    )
-
-    comment = discord.ui.TextInput(
-        label="كيف كان التعامل؟",
-        placeholder="مثال: سريع ومحترم",
-        required=True,
-        max_length=120,
-        style=discord.TextStyle.paragraph
-    )
-
-    async def on_submit(self, interaction: discord.Interaction):
-        global reviews_data
-
-        try:
-            stars_num = int(self.stars.value)
-        except ValueError:
-            await interaction.response.send_message("عدد النجوم لازم يكون رقم من 1 إلى 5", ephemeral=True)
-            return
-
-        if stars_num < 1 or stars_num > 5:
-            await interaction.response.send_message("عدد النجوم لازم يكون من 1 إلى 5 فقط", ephemeral=True)
-            return
-
-        target = self.target_name.value.strip()
-        comment_text = self.comment.value.strip()
-
-        if not target:
-            await interaction.response.send_message("اكتب اسم الشخص بشكل صحيح", ephemeral=True)
-            return
-
-        if target not in reviews_data:
-            reviews_data[target] = {
-                "reviews": []
-            }
-
-        review_entry = {
-            "author_id": interaction.user.id,
-            "author_name": str(interaction.user),
-            "stars": stars_num,
-            "comment": comment_text,
-            "time": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
-        }
-
-        reviews_data[target]["reviews"].append(review_entry)
-        save_json(REVIEWS_FILE, reviews_data)
-
-        user_reviews = reviews_data[target]["reviews"]
-        avg = average_rating(user_reviews)
-        total_reviews = len(user_reviews)
-
-        embed = discord.Embed(
-            title="⭐ تقييم جديد ⭐",
-            description=(
-                f"## **تعامل ممتاز**\n\n"
-                f"**الشخص:** {target}\n"
-                f"**التقييم:** {stars_view(stars_num)} `({stars_num}/5)`\n"
-                f"**الرأي:** {comment_text}\n"
-                f"**المتوسط:** {avg} من 5\n"
-                f"**عدد التقييمات:** {total_reviews}\n"
-                f"**من:** {interaction.user.mention}"
-            ),
-            color=discord.Color.gold()
-        )
-
-        channel = bot.get_channel(REVIEW_CHANNEL_ID)
-        if channel is None:
-            await interaction.response.send_message("ما لقيت روم التقييمات", ephemeral=True)
-            return
-
-        await channel.send(embed=embed)
-        await interaction.response.send_message("تم إرسال تقييمك", ephemeral=True)
+    embed.set_footer(text="شكرًا لك على تقييم المتجر")
+    return embed
 
 
-class ReviewButtonView(discord.ui.View):
+def cleanup_pending():
+    now = time.time()
+    expired_users = []
+
+    for user_id, data in pending_reviews.items():
+        if now - data["created_at"] > 180:
+            expired_users.append(user_id)
+
+    for user_id in expired_users:
+        del pending_reviews[user_id]
+
+
+class ReviewStarsView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
 
-    @discord.ui.button(label="⭐ قيّم", style=discord.ButtonStyle.success, custom_id="review_button")
-    async def review_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.send_modal(ReviewModal())
+    async def handle_click(self, interaction: discord.Interaction, stars: int):
+        cleanup_pending()
+
+        pending_reviews[interaction.user.id] = {
+            "stars": stars,
+            "created_at": time.time(),
+            "channel_id": interaction.channel.id
+        }
+
+        await interaction.response.send_message(
+            f"تم اختيار تقييمك: {stars_view(stars)}\n"
+            f"**اكتب كلام حلو أو حدثنا عن تجربتك**\n"
+            f"ولو ما تبي تكتب، اكتب `تخطي`.",
+            ephemeral=True
+        )
+
+    @discord.ui.button(label="⭐ 1", style=discord.ButtonStyle.secondary, custom_id="rate_1")
+    async def rate_1(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self.handle_click(interaction, 1)
+
+    @discord.ui.button(label="⭐ 2", style=discord.ButtonStyle.secondary, custom_id="rate_2")
+    async def rate_2(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self.handle_click(interaction, 2)
+
+    @discord.ui.button(label="⭐ 3", style=discord.ButtonStyle.primary, custom_id="rate_3")
+    async def rate_3(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self.handle_click(interaction, 3)
+
+    @discord.ui.button(label="⭐ 4", style=discord.ButtonStyle.success, custom_id="rate_4")
+    async def rate_4(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self.handle_click(interaction, 4)
+
+    @discord.ui.button(label="⭐ 5", style=discord.ButtonStyle.success, custom_id="rate_5")
+    async def rate_5(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self.handle_click(interaction, 5)
 
 
-async def ensure_button_message():
-    global config_data
-
+async def ensure_review_message():
     channel = bot.get_channel(REVIEW_CHANNEL_ID)
     if channel is None:
-        print("❌ ما لقيت روم التقييمات")
+        print("❌ ما لقيت روم التقييم")
         return
 
-    old_message_id = config_data.get("button_message_id")
+    old_message_id = config_data.get("message_id")
 
     if old_message_id:
         try:
-            old_message = await channel.fetch_message(old_message_id)
-            if old_message:
+            msg = await channel.fetch_message(old_message_id)
+            if msg:
                 return
         except Exception:
             pass
 
-    msg = await channel.send(
-        content="**اضغط الزر تحت للتقييم**",
-        view=ReviewButtonView()
+    embed = discord.Embed(
+        title="⭐ قيّم المتجر",
+        description=(
+            "## **رأيك يهمنا**\n\n"
+            "**إذا أعجبك التعامل قيّمنا من 1 إلى 5 نجوم**\n"
+            "**وبعد اختيار النجمة اكتب كلام حلو أو حدثنا عن تجربتك**"
+        ),
+        color=discord.Color.green()
     )
+    embed.set_footer(text="اضغط النجمة المناسبة")
 
-    config_data["button_message_id"] = msg.id
+    msg = await channel.send(embed=embed, view=ReviewStarsView())
+    config_data["message_id"] = msg.id
     save_json(CONFIG_FILE, config_data)
-    print("✅ تم إرسال زر التقييم")
+    print("✅ تم إرسال رسالة التقييم")
 
 
 @bot.event
 async def on_ready():
-    bot.add_view(ReviewButtonView())
+    bot.add_view(ReviewStarsView())
     print(f"✅ تم تشغيل البوت: {bot.user}")
-    await ensure_button_message()
+    await ensure_review_message()
+
+
+@bot.event
+async def on_message(message: discord.Message):
+    await bot.process_commands(message)
+
+    if message.author.bot:
+        return
+
+    if message.channel.id != REVIEW_CHANNEL_ID:
+        return
+
+    cleanup_pending()
+
+    pending = pending_reviews.get(message.author.id)
+    if not pending:
+        return
+
+    if pending["channel_id"] != message.channel.id:
+        return
+
+    stars = pending["stars"]
+    user_text = message.content.strip()
+
+    if not user_text:
+        return
+
+    if user_text.lower() == "تخطي":
+        user_text = "تعامل ممتاز"
+
+    try:
+        await message.delete()
+    except Exception:
+        pass
+
+    add_review(message.author, stars, user_text)
+    embed = build_review_embed(message.author, stars, user_text)
+    await message.channel.send(embed=embed)
+
+    del pending_reviews[message.author.id]
 
 
 bot.run(TOKEN)
