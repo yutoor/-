@@ -6,7 +6,7 @@ from datetime import datetime
 
 TOKEN = "حط_توكن_البوت_هنا"
 REVIEW_CHANNEL_ID = 1482899764407435394
-DATA_FILE = "reviews.json"
+DATA_FILE = "/app/data/reviews.json"   # مهم عشان نحفظه على Volume
 PREFIX = "!"
 
 intents = discord.Intents.default()
@@ -16,7 +16,11 @@ intents.members = True
 
 bot = commands.Bot(command_prefix=PREFIX, intents=intents, help_command=None)
 
+def ensure_data_dir():
+    os.makedirs("/app/data", exist_ok=True)
+
 def load_reviews():
+    ensure_data_dir()
     if not os.path.exists(DATA_FILE):
         return {}
     try:
@@ -26,6 +30,7 @@ def load_reviews():
         return {}
 
 def save_reviews(data):
+    ensure_data_dir()
     with open(DATA_FILE, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=4)
 
@@ -46,6 +51,8 @@ async def on_ready():
 
 @bot.command(name="قيم")
 async def rate_user(ctx, member: discord.Member = None, stars: int = None, *, comment: str = None):
+    global reviews_data
+
     if ctx.author.bot:
         return
 
@@ -68,7 +75,7 @@ async def rate_user(ctx, member: discord.Member = None, stars: int = None, *, co
 
     review_channel = bot.get_channel(REVIEW_CHANNEL_ID)
     if review_channel is None:
-        await ctx.reply("ما لقيت روم التقييمات، تأكد من الآيدي وخلي البوت عنده صلاحية يرسل في الروم.")
+        await ctx.reply("ما لقيت روم التقييمات، تأكد من الآيدي والصلاحيات.")
         return
 
     target_id = str(member.id)
