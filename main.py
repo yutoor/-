@@ -41,7 +41,7 @@ def save_json(path, data):
 
 
 reviews_data = load_json(REVIEWS_FILE, {})
-config_data = load_json(CONFIG_FILE, {"panel_message_id": None})
+config_data = load_json(CONFIG_FILE, {"button_message_id": None})
 
 
 def stars_view(count: int) -> str:
@@ -57,7 +57,7 @@ def average_rating(user_reviews):
 
 class ReviewModal(discord.ui.Modal, title="إرسال تقييم"):
     target_name = discord.ui.TextInput(
-        label="اسم الشخص أو البائع",
+        label="اسم الشخص",
         placeholder="مثال: خالد",
         required=True,
         max_length=50
@@ -84,16 +84,18 @@ class ReviewModal(discord.ui.Modal, title="إرسال تقييم"):
         try:
             stars_num = int(self.stars.value)
         except ValueError:
-            await interaction.response.send_message("عدد النجوم لازم يكون رقم من 1 إلى 5.", ephemeral=True)
+            await interaction.response.send_message("عدد النجوم لازم يكون رقم من 1 إلى 5", ephemeral=True)
             return
 
         if stars_num < 1 or stars_num > 5:
-            await interaction.response.send_message("عدد النجوم لازم يكون من 1 إلى 5 فقط.", ephemeral=True)
+            await interaction.response.send_message("عدد النجوم لازم يكون من 1 إلى 5 فقط", ephemeral=True)
             return
 
         target = self.target_name.value.strip()
+        comment_text = self.comment.value.strip()
+
         if not target:
-            await interaction.response.send_message("اكتب اسم الشخص بشكل صحيح.", ephemeral=True)
+            await interaction.response.send_message("اكتب اسم الشخص بشكل صحيح", ephemeral=True)
             return
 
         if target not in reviews_data:
@@ -105,7 +107,7 @@ class ReviewModal(discord.ui.Modal, title="إرسال تقييم"):
             "author_id": interaction.user.id,
             "author_name": str(interaction.user),
             "stars": stars_num,
-            "comment": self.comment.value.strip(),
+            "comment": comment_text,
             "time": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
         }
 
@@ -119,37 +121,36 @@ class ReviewModal(discord.ui.Modal, title="إرسال تقييم"):
         embed = discord.Embed(
             title="⭐ تقييم جديد ⭐",
             description=(
-                f"# **تعامل ممتاز**\n"
-                f"## **{self.comment.value.strip()}**\n\n"
+                f"## **تعامل ممتاز**\n\n"
                 f"**الشخص:** {target}\n"
                 f"**التقييم:** {stars_view(stars_num)} `({stars_num}/5)`\n"
+                f"**الرأي:** {comment_text}\n"
                 f"**المتوسط:** {avg} من 5\n"
                 f"**عدد التقييمات:** {total_reviews}\n"
                 f"**من:** {interaction.user.mention}"
             ),
             color=discord.Color.gold()
         )
-        embed.set_footer(text="نظام تقييم المتجر")
 
         channel = bot.get_channel(REVIEW_CHANNEL_ID)
         if channel is None:
-            await interaction.response.send_message("ما لقيت روم التقييمات.", ephemeral=True)
+            await interaction.response.send_message("ما لقيت روم التقييمات", ephemeral=True)
             return
 
         await channel.send(embed=embed)
-        await interaction.response.send_message("تم إرسال التقييم وحفظه.", ephemeral=True)
+        await interaction.response.send_message("تم إرسال تقييمك", ephemeral=True)
 
 
-class ReviewPanelView(discord.ui.View):
+class ReviewButtonView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
 
-    @discord.ui.button(label="⭐ قيّم", style=discord.ButtonStyle.success, custom_id="persistent_review_button")
+    @discord.ui.button(label="⭐ قيّم", style=discord.ButtonStyle.success, custom_id="review_button")
     async def review_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.send_modal(ReviewModal())
 
 
-async def ensure_panel_message():
+async def ensure_button_message():
     global config_data
 
     channel = bot.get_channel(REVIEW_CHANNEL_ID)
@@ -157,75 +158,31 @@ async def ensure_panel_message():
         print("❌ ما لقيت روم التقييمات")
         return
 
-    panel_message_id = config_data.get("panel_message_id")
+    old_message_id = config_data.get("button_message_id")
 
-    if panel_message_id:
+    if old_message_id:
         try:
-            msg = await channel.fetch_message(panel_message_id)
-            if msg:
+            old_message = await channel.fetch_message(old_message_id)
+            if old_message:
                 return
         except Exception:
             pass
 
-    embed = discord.Embed(
-        title="⭐ نظام التقييم",
-        description=(
-            "# **قيّم التعامل**\n"
-            "## **اضغط الزر تحت وأرسل تقييمك**\n\n"
-            "**التقييم يظهر بالنجوم ويحفظ تلقائيًا.**"
-        ),
-        color=discord.Color.green()
+    msg = await channel.send(
+        content="**اضغط الزر تحت للتقييم**",
+        view=ReviewButtonView()
     )
-    embed.set_footer(text="لوحة التقييم الثابتة")
 
-    msg = await channel.send(embed=embed, view=ReviewPanelView())
-    config_data["panel_message_id"] = msg.id
+    config_data["button_message_id"] = msg.id
     save_json(CONFIG_FILE, config_data)
-    print("✅ تم إنشاء لوحة التقييم")
+    print("✅ تم إرسال زر التقييم")
 
 
 @bot.event
 async def on_ready():
-    bot.add_view(ReviewPanelView())
+    bot.add_view(ReviewButtonView())
     print(f"✅ تم تشغيل البوت: {bot.user}")
-    await ensure_panel_message()
-
-
-@bot.command(name="سمعة")
-async def reputation(ctx, *, target: str = None):
-    if not target:
-        await ctx.reply("اكتب كذا: `!سمعة خالد`")
-        return
-
-    if target not in reviews_data or not reviews_data[target]["reviews"]:
-        await ctx.reply("هذا الشخص ما عنده تقييمات إلى الآن.")
-        return
-
-    user_reviews = reviews_data[target]["reviews"]
-    avg = average_rating(user_reviews)
-    total_reviews = len(user_reviews)
-    rounded_stars = max(1, min(5, round(avg)))
-
-    embed = discord.Embed(
-        title="📊 سمعة",
-        description=(
-            f"**الاسم:** {target}\n"
-            f"**المتوسط:** {avg} من 5\n"
-            f"**النجوم:** {stars_view(rounded_stars)}\n"
-            f"**عدد التقييمات:** {total_reviews}"
-        ),
-        color=discord.Color.blue()
-    )
-
-    latest_reviews = user_reviews[-5:][::-1]
-    for i, review in enumerate(latest_reviews, start=1):
-        embed.add_field(
-            name=f"تقييم #{i} - {stars_view(review['stars'])}",
-            value=f"**{review['comment']}**\nمن: <@{review['author_id']}>",
-            inline=False
-        )
-
-    await ctx.reply(embed=embed)
+    await ensure_button_message()
 
 
 bot.run(TOKEN)
